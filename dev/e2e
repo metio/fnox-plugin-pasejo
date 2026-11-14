@@ -1,0 +1,82 @@
+#!/usr/bin/env sh
+# SPDX-FileCopyrightText: The pasejo Authors
+# SPDX-License-Identifier: 0BSD
+
+# Usage: dev/e2e
+# Creates a throwaway pasejo store and fnox project, links this checkout as
+# the plugin `pasejo`, and checks what fnox reads through it. PASEJO_BIN
+# selects the pasejo executable, `pasejo` on PATH otherwise. Nothing outside
+# the temporary directory is read or written.
+
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+pasejo=$(command -v "${PASEJO_BIN:-pasejo}")
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+fail() {
+    echo "[FAIL] $*" >&2
+    exit 1
+}
+
+export PASEJO_CONFIG="$work/pasejo.toml"
+export PASEJO_DATA_DIR="$work/pasejo-data"
+export FNOX_DATA_DIR="$work/fnox-data"
+unset PASEJO_DEFAULT_STORE
+
+age-keygen -o "$work/identity" 2> /dev/null
+"$pasejo" store add --name main --path "$work/store"
+"$pasejo" identity add --file "$work/identity"
+"$pasejo" recipient add --public-key "$(age-keygen -y "$work/identity")"
+printf 'hunter2\nusername: alice\n' | "$pasejo" secret add database
+printf 'tok-123456' | "$pasejo" secret add api/token
+
+# Records every pasejo invocation, so the test can count them.
+cat > "$work/pasejo-counting" << SCRIPT
+#!/usr/bin/env sh
+echo "\$*" >> "$work/calls"
+exec "$pasejo" "\$@"
+SCRIPT
+chmod +x "$work/pasejo-counting"
+
+mkdir "$work/project"
+cat > "$work/project/fnox.toml" << TOML
+root = true
+
+[providers.pasejo]
+type = "lua"
+plugin = "pasejo"
+options = { bin = "$work/pasejo-counting" }
+
+[secrets]
+TOKEN = { provider = "pasejo", value = "api/token", if_missing = "error" }
+DB_USER = { provider = "pasejo", value = "database#username", if_missing = "error" }
+DB_PASSWORD = { provider = "pasejo", value = "database", if_missing = "error" }
+
+[profiles.broken.secrets]
+DB_PORT = { provider = "pasejo", value = "database#port", if_missing = "error" }
+TOML
+
+fnox plugin link pasejo "$root" > /dev/null
+cd "$work/project"
+
+fnox provider test pasejo > /dev/null || fail "fnox provider test pasejo"
+echo "[OK] fnox provider test runs pasejo"
+
+: > "$work/calls"
+# The child shell expands the variables fnox sets.
+# shellcheck disable=SC2016
+values=$(fnox exec -- sh -c 'printf "%s|%s|%s" "$TOKEN" "$DB_USER" "$DB_PASSWORD"')
+[ "$values" = "tok-123456|alice|hunter2" ] || fail "fnox exec saw '$values'"
+echo "[OK] fnox exec sets the first line and fields of secrets"
+calls=$(grep -c '^secret resolve$' "$work/calls" || true)
+[ "$calls" -eq 1 ] || fail "fnox exec ran 'pasejo secret resolve' $calls times instead of once"
+echo "[OK] fnox exec resolves every secret with one pasejo call"
+
+if fnox exec --profile broken -- touch "$work/ran" 2> "$work/stderr"; then
+    fail "fnox exec succeeded although database#port does not exist"
+fi
+[ ! -e "$work/ran" ] || fail "fnox exec ran the command with a value missing"
+grep -q 'database#port' "$work/stderr" || fail "the error does not name database#port: $(cat "$work/stderr")"
+echo "[OK] a missing field stops the command and names the reference"

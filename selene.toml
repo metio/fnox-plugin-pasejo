@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: The pasejo Authors
+# SPDX-License-Identifier: 0BSD
+
+# fnox embeds Lua 5.4, but the released selene binaries carry only the 5.1
+# library. The plugin uses nothing that differs between the two.
+std = "lua51"

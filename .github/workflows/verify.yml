@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: The pasejo Authors
+# SPDX-License-Identifier: 0BSD
+
+# `Verify` is the one required check and passes only when every other job
+# succeeded or was skipped.
+
+name: Verify
+on:
+  merge_group:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    uses: metio/ci/.github/workflows/lint.yml@00adafd0fe1924f57325d9dd264d5d731fb099ad # 2026.11.4082509
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: metio/ci/breto@00adafd0fe1924f57325d9dd264d5d731fb099ad # 2026.11.4082509
+        with:
+          registries: github:metio/toolchains
+      - run: breto run e2e
+
+  verify:
+    name: Verify
+    needs: [lint, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify every job succeeded or skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          bad=$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key)=\(.value.result)"')
+          [ -z "$bad" ] || { echo "::error::$bad"; exit 1; }

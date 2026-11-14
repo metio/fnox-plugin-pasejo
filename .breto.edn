@@ -1,0 +1,13 @@
+;; SPDX-FileCopyrightText: The pasejo Authors
+;; SPDX-License-Identifier: 0BSD
+
+{:packages ["@lint" "stylua" "selene" "fnox" "pasejo" "age"]
+ :commands
+ {"ci-stylua" {:run ["stylua" "--check" "."]}
+  "ci-selene" {:run ["selene" "."]}
+  "ci-shell" {:run ["shellcheck" "dev/e2e"]}
+  "ci-lint" {:depends ["ci-typos" "ci-yaml" "ci-actionlint" "ci-zizmor" "ci-markdown"
+                       "ci-stylua" "ci-selene" "ci-shell"]
+             :description "Every lint and static check"}
+  "e2e" {:run ["dev/e2e"]
+         :description "Read secrets from a throwaway pasejo store through fnox and this plugin"}}}
